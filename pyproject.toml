@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "umbra-transit"
+description = "A minimal, visual tool for Exoplanet Watch: finds the usable MicroObservatory transit nights, runs EXOTIC on them and shows each light curve"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Stefano Ivan Stinga"}]
+requires-python = ">=3.10"
+dependencies = ["numpy", "scipy", "astropy", "requests"]
+dynamic = ["version"]
+
+[project.scripts]
+umbra = "umbra.__main__:main"
+
+[tool.setuptools]
+packages = ["umbra"]
+
+[tool.setuptools.dynamic]
+version = {attr = "umbra.__version__"}
+
+[tool.setuptools.package-data]
+umbra = ["web/*", "web/fonts/*"]
