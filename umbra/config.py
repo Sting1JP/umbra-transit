@@ -6,6 +6,7 @@ from pathlib import Path
 # The app's name lives here and nowhere else in the code. To rename the project, see README.
 NAME = 'Umbra'             # shown on the screen
 SLUG = 'umbra'             # data folder, database file, folder marker, environment variable prefix
+HOME_URL = 'https://github.com/Sting1JP/umbra-transit'     # sent with every request, so a server's operator can find the author
 
 LISTING_URL = ('https://waps.cfa.harvard.edu/microobservatory/MOImageDirectory/ImageDirectory.php'
                '?SortBy=&SortPos=&SearchFor=&Type=Object&SortRange=%d')     # everything, for the last 10, 20 or 30 days
@@ -22,7 +23,7 @@ ALLOWED_HOSTS = frozenset({'waps.cfa.harvard.edu', 'mo-www.cfa.harvard.edu', 'ww
 
 FRAME_BYTES = 656640            # one 650 x 500 16-bit MicroObservatory frame
 KEEP_DAYS = 30                  # the directory lists the last 30 days
-RECENT_DAYS = 10                # the shorter listing read between full ones
+RECENT_DAYS = 10                # the shorter listing, enough while the last read is newer than that
 # Directory target (letters and digits, lower case) -> ExoClock name, where they differ.
 ALIASES = {'hatp10': 'WASP-11b'}
 
@@ -41,7 +42,7 @@ class Settings:
     sample_frames: int = 8      # frames looked at before a full download
     sample_pass: float = 0.6    # share of sampled frames that must be clear
     min_stars: int = 40         # fewer stars than this in the best frames means overcast
-    fetch_pause: float = 0.2    # seconds between downloads
+    fetch_pause: float = 1.0    # seconds between downloads
     refresh_hours: float = 6    # how often the directory is read again
     reject_keep_days: float = 2 # raw frames of lost nights are deleted after this
     max_full: int = 0           # full downloads per run (0 = no limit)

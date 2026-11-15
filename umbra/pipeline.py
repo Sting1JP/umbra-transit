@@ -46,7 +46,7 @@ class Pipeline:
         self.settings, self.store = settings, store
         self.activity = None                # what the autopilot is doing right now, for the screen
         self.hold = self._held = None       # why it is waiting: 'offline' or 'disk'
-        self.refreshed = 0.0
+        self.refreshed = store.when('directory')        # a restart does not read the directory sooner than it was due
         self.asked_aavso = 0.0
         self._wake, self._stop = threading.Event(), threading.Event()
         self._full = 0
@@ -56,7 +56,8 @@ class Pipeline:
     def refresh(self):
         """Read the directory and record every transit run in it: a long series of frames on one target."""
         self.activity = dict(stage='directory')
-        recent = time.time() - self.refreshed < 7 * 86400       # the full 30 days at the start, then the last 10
+        # the full 30 days the first time or after a long break; otherwise the last 10 hold everything new
+        recent = time.time() - self.store.when('directory') < (RECENT_DAYS - 1) * 86400
         frames = directory.listing(RECENT_DAYS if recent else KEEP_DAYS)
         if not frames:
             self.store.log(None, 'the directory listed no frames')
@@ -93,6 +94,7 @@ class Pipeline:
                     fields.update(stage=DONE, grade=verdict['grade'], headline=verdict['headline'],
                                   report=dict(transit=transit, verdict=verdict))
             self.store.save(nid, **fields)
+        self.store.mark('directory')
         self.refreshed = time.time()
         self.activity = None
 

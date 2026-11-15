@@ -4,9 +4,11 @@ from urllib.parse import urlsplit
 
 import requests
 
-from .config import ALLOWED_HOSTS, SLUG
+from . import __version__
+from .config import ALLOWED_HOSTS, HOME_URL
 
-_UA = {'User-Agent': '%s (Exoplanet Watch participant)' % SLUG}
+# what this is and where to reach its author, for the logs of the servers it reads
+_UA = {'User-Agent': '%s/%s (+%s; Exoplanet Watch)' % (HOME_URL.rsplit('/', 1)[1], __version__, HOME_URL)}
 
 
 def _check(url):

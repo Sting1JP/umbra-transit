@@ -3,12 +3,13 @@ import json
 import os
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 
 import numpy as np
 import pytest
 
-from umbra import digest, directory, ephemeris, grade, net, reduce, screen
+from umbra import __version__, digest, directory, ephemeris, grade, net, reduce, screen
 from umbra.config import Settings
 from umbra.pipeline import Pipeline
 from umbra.server import _local_host, act, open_form
@@ -342,6 +343,12 @@ def test_stopping_takes_exotic_down_too(tmp_path):
         os.kill(int((tmp_path / 'pid').read_text()), 0)
 
 
+def test_requests_say_what_umbra_is_and_where_to_find_it():
+    agent = net._UA['User-Agent']
+    assert agent == 'umbra-transit/%s (+https://github.com/Sting1JP/umbra-transit; Exoplanet Watch)' % __version__
+    assert '@' not in agent and Settings().fetch_pause >= 1
+
+
 def test_network_is_allow_listed():
     for url in ('https://example.com/x', 'http://mo-www.cfa.harvard.edu/ImageDirectory/x.FITS', 'file:///etc/passwd'):
         with pytest.raises(ValueError):
@@ -476,6 +483,12 @@ def test_a_planet_exoclock_cannot_predict_does_not_stop_the_others(tmp_path, mon
     pipe.refresh()
     pipe.refresh()
     assert asked == [30, 10]                                    # the whole directory first, then the recent part
+    again = Pipeline(settings, store)                           # a restart: no read before it is due, and then a short one
+    assert time.time() - again.refreshed < settings.refresh_hours * 3600
+    again.refresh()
+    store._db.execute('UPDATE times SET ts = ts - 12 * 86400')  # after a long break the recent part would miss nights
+    Pipeline(settings, store).refresh()
+    assert asked == [30, 10, 10, 30]
     assert store.get('wasp10-20261012')['headline'] == 'No ephemeris for this planet'
     assert store.get('qatar1-20261014')['planet'] == 'Qatar-1b'
     assert len(store.all()) == 2                                # a few frames of something else are not a transit run

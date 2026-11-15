@@ -1,4 +1,4 @@
-"""SQLite state: one row per night, plus a short activity log."""
+"""SQLite state: one row per night, a short activity log, and a few remembered times."""
 import json
 import sqlite3
 import threading
@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS nights (
     stage TEXT, grade TEXT, headline TEXT, failures INTEGER DEFAULT 0, cleaned INTEGER DEFAULT 0,
     listing TEXT, report TEXT, updated REAL, uploaded TEXT);
 CREATE TABLE IF NOT EXISTS log (ts REAL, night TEXT, message TEXT);
+CREATE TABLE IF NOT EXISTS times (what TEXT PRIMARY KEY, ts REAL);
 """
 _COLUMNS = {'target', 'planet', 'first_frame', 'last_frame', 'frames', 'stage', 'grade', 'headline', 'failures',
             'cleaned', 'listing', 'report', 'uploaded'}
@@ -62,6 +63,16 @@ class Store:
         with self._lock, self._db:
             self._db.execute('INSERT INTO log VALUES (?, ?, ?)', (time.time(), night_id, message))
             self._db.execute('DELETE FROM log WHERE ts < ?', (time.time() - 60 * 86400,))
+
+    def when(self, what):
+        """The time something was last done, or 0."""
+        with self._lock:
+            row = self._db.execute('SELECT ts FROM times WHERE what = ?', (what,)).fetchone()
+        return row['ts'] if row else 0.0
+
+    def mark(self, what):
+        with self._lock, self._db:
+            self._db.execute('INSERT OR REPLACE INTO times VALUES (?, ?)', (what, time.time()))
 
     def recent(self, count=20):
         with self._lock:
