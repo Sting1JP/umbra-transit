@@ -22,13 +22,13 @@ from pathlib import Path
 
 from .config import SLUG
 from .directory import spaced
-from .grade import GOOD, IMPROVABLE
+from .grade import GOOD, IMPROVABLE, MOVED
 
 CREDIT = ('These observations were conducted with MicroObservatory, a robotic telescope network managed by the '
           'Harvard-Smithsonian Center for Astrophysics on behalf of NASA\'s Universe of Learning. This work is '
           'supported by NASA under award number NNX16AC65A to the Space Telescope Science Institute.')
 MIN_FRAMES = 25
-READ = 4            # raised when EXOTIC's files are read or checked differently, so stored fits are read again
+READ = 5            # raised when EXOTIC's files are read or checked differently, so stored fits are read again
 NEWER_HELPS = ('No clear dip', 'Weak detection', 'Depth off', 'No comparison star')     # see verdict()
 _NUM = r'([-+]?\d+\.?\d*(?:[eE][-+]?\d+)?)'
 _FULL_PATH = re.compile(r'"(?:/|[A-Za-z]:\\)[^"]*[/\\]([^"/\\]+)"')    # a quoted absolute path, Unix or Windows; group 1 is the file name
@@ -306,7 +306,7 @@ def verdict(checks, dropped, newer=False):
         return dict(grade=GOOD, headline='Transit recovered', remedy=note)
     worst = next((c for c in failed + warned if c['key'] != 'file'), warned[-1] if warned else failed[0])   # the file last
     headline = worst.get('why') or {'timing': 'Timing off', 'dip': 'No clear dip', 'agree': 'Fit and quick look disagree',
-                                    'comparison': 'No comparison star', 'qc': 'EXOTIC doubts its fit'}[worst['key']]
+                                    'comparison': 'No comparison star', 'qc': 'EXOTIC doubts its fit', 'pointing': MOVED}[worst['key']]
     # The 2026 line picks comparison stars better and flattens the baseline before fitting, which has recovered
     # dips the 4.3.1 release lost. Suggest it when the release gave a weak answer.
     remedy = 'Try the newer EXOTIC' if headline in NEWER_HELPS and not newer else 'Check the fit before uploading'

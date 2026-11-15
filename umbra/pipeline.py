@@ -197,10 +197,13 @@ class Pipeline:
     def _judge(self, report, fit, used, newer):
         """The verdict on EXOTIC's result, checked against the screening."""
         own = [c for c in report['verdict']['checks'] if c['key'] in grade.KEYS]    # without the checks of an earlier fit
+        own = [c for c in own if c['key'] != 'pointing']
+        moved = [c for c in [grade.pointing(report)] if c]          # judged afresh: older verdicts were made without it
         checks = reduce.check(fit, report['transit'], report.get('phot'))
         checks.append(reduce.audit(fit['files']['report'], self.settings.observer, report.get('binning', '2x2')))
         report['fit'] = dict(fit, **used)
-        return dict(reduce.verdict(checks, used['dropped'], newer), checks=own + checks)
+        held = [c for c in moved if c['state'] != 'ok']             # the fit cannot mend a jump in the transit
+        return dict(reduce.verdict(checks + held, used['dropped'], newer), checks=own + moved + checks)
 
     def _reread(self, night, report):
         """Read EXOTIC's files for a finished night again, after a change in how they are read. EXOTIC is not run."""

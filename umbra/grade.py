@@ -4,7 +4,11 @@ Each check returns (state, problem, value, remedy); state is 'ok', 'warn' or 'fa
 check names the night's problem; warnings name what would improve it. Wording is kept short on purpose.
 """
 
+from math import hypot
+
 GOOD, IMPROVABLE, LOST = 'good', 'improvable', 'lost'
+JUMP = 15       # px between two frames that counts as a re-pointing; ordinary jitter stays under about 10
+MOVED = 'Telescope moved in the transit'
 
 
 def _coverage(s):
@@ -77,9 +81,31 @@ def _signal(s):
     return 'warn', 'Faint dip', value, None
 
 
+def _pointing(s):
+    """Jumps of the field between frames. There are no flats, so a jump shifts a star's brightness by a per cent or so:
+    outside the transit that costs little, inside it bends the dip."""
+    p, t, tr = s.get('phot') or {}, (s.get('series') or {}).get('t') or [], s['transit']
+    dx, dy = p.get('dx') or [], p.get('dy') or []
+    if not t or not len(dx) == len(dy) == len(t) or 'ingress' not in tr:
+        return None
+    jumps = [(k, hypot(dx[k] - dx[k - 1], dy[k] - dy[k - 1])) for k in range(1, len(t))]
+    jumps = [(k, d) for k, d in jumps if d > JUMP]
+    inside = [d for k, d in jumps if t[k] >= tr['ingress'] and t[k - 1] <= tr['egress']]
+    if inside:
+        return 'warn', MOVED, '%d jump%s in the transit, up to %d px' % (len(inside), 's' * (len(inside) > 1), max(inside)), None
+    return 'ok', None, '%d jump%s, outside the transit' % (len(jumps), 's' * (len(jumps) > 1)) if jumps else 'steady', None
+
+
 CHECKS = (('coverage', 'Coverage', _coverage), ('sky', 'Sky', _sky), ('first', 'First frame', _first_frame),
-          ('gaps', 'Gaps', _gaps), ('airmass', 'Airmass', _airmass), ('signal', 'Signal', _signal))
+          ('gaps', 'Gaps', _gaps), ('airmass', 'Airmass', _airmass), ('signal', 'Signal', _signal),
+          ('pointing', 'Pointing', _pointing))
 KEYS = tuple(key for key, _, _ in CHECKS)
+
+
+def pointing(s):
+    """The pointing check on its own, for the verdict on a fit: a sound fit does not undo a jump."""
+    r = _pointing(s)
+    return dict(key='pointing', label='Pointing', state=r[0], value=r[2]) if r else None
 
 
 def missed(transit):

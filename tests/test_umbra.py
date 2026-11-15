@@ -28,7 +28,7 @@ def result(**over):
              gap=dict(longest_min=3, in_transit_min=0),
              phot=dict(saturated=False, peak=1000, depth=0.021, snr=7.0, scatter=0.012))
     for key, value in over.items():
-        s[key] = dict(s[key], **value) if isinstance(value, dict) else value
+        s[key] = dict(s.get(key, {}), **value) if isinstance(value, dict) else value
     return s
 
 
@@ -59,6 +59,22 @@ def test_grades():
     assert grade.partial(dict(pre_min=-1569, post_min=1652, duration_h=2.5))['headline'] == 'No transit in the frames'
     assert grade.grade(result(phot=dict(depth=0.008, snr=3.0)))['grade'] == grade.IMPROVABLE
     assert grade.grade(result(phot=dict(saturated=True)))['grade'] == grade.LOST
+
+
+def test_a_jump_inside_the_transit_keeps_a_night_from_good():
+    times = ['2026-10-16T0%d:%02d:00Z' % (6 + k // 20, 3 * (k % 20)) for k in range(80)]
+    window = dict(ingress='2026-10-16T07:18:00Z', egress='2026-10-16T08:48:00Z')
+    night = lambda dy: result(transit=window, series=dict(t=times), phot=dict(dx=[0] * 80, dy=dy))
+    steady, early = night([k % 3 for k in range(80)]), night([90] * 10 + [0] * 70)      # jitter; a re-pointing before ingress
+    assert [grade.pointing(n)['value'] for n in (steady, early)] == ['steady', '1 jump, outside the transit']
+    assert grade.grade(steady)['grade'] == grade.grade(early)['grade'] == grade.GOOD
+    moved = night([0] * 40 + [90] * 40)
+    assert grade.pointing(moved) == dict(key='pointing', label='Pointing', state='warn', value='1 jump in the transit, up to 90 px')
+    assert (grade.grade(moved)['grade'], grade.grade(moved)['headline']) == (grade.IMPROVABLE, grade.MOVED)
+    assert grade.pointing(result()) is None                 # no shifts measured: no claim either way
+    sound = reduce.check(fitted(), TRANSIT, None)           # a sound fit does not undo the jump
+    assert reduce.verdict(sound + [grade.pointing(moved)], 0, newer=True) == dict(
+        grade=grade.IMPROVABLE, headline=grade.MOVED, remedy='Check the fit before uploading')
 
 
 def test_a_night_umbra_cannot_measure_is_kept_not_lost():
