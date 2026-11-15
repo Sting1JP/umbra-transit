@@ -297,10 +297,14 @@
   const PERIOD = 32000;
   let scene = null;
   function frame(now) {                     // puts the scene where the replay is at this moment
-    if (!scene || !scene.alive()) return;
+    if (!scene || !scene.alive() || scene.over) return;
     const laps = Math.max(0, now - scene.start) / PERIOD, u = laps % 1;       // a scene can be made after this frame's clock was read
-    if (laps >= 1 && scene.next) scene.next();
-    else scene.step(u, scene.t0 + u * (scene.t1 - scene.t0));
+    if (laps >= 1 && scene.next) {
+      scene.over = true;                    // asked once: the next night takes a few frames to load
+      scene.next();
+    } else {
+      scene.step(u, scene.t0 + u * (scene.t1 - scene.t0));
+    }
   }
 
   function play(now) {
@@ -443,15 +447,18 @@
   }
 
   function trace(el, n, r) {                // the night's curve as one thin line, drawn up to a moving edge while it plays
-    const tr = r.transit, model = modelOf(r), w = el.clientWidth, h = 84, clip = 'u' + (++uid);
+    const tr = r.transit, model = modelOf(r), pts = pointsOf(r), w = el.clientWidth, h = 84, clip = 'u' + (++uid);
     const t0 = ms(n.first_frame) - 6e5, t1 = ms(n.last_frame) + 6e5, lo = 1 - tr.depth * 2.2, hi = 1 + tr.depth * 1.2;
     const x = t => (t - t0) / (t1 - t0) * w, y = v => 6 + (hi - Math.min(hi, Math.max(lo, v))) / (hi - lo) * (h - 12);
+    // before there is a curve: the predicted dip, dotted, over one tick for each frame of the night
+    const frames = pts ? '' : Array.from({length: n.frames}, (_, i) => f(x(ms(n.first_frame) + (i + 0.5) / n.frames * (ms(n.last_frame) - ms(n.first_frame)))))
+      .map(at => '<line class="fr" x1="' + at + '" x2="' + at + '" y1="' + (h - 9) + '" y2="' + (h - 3) + '"/>').join('');
     el.innerHTML = '<svg viewBox="0 0 ' + w + ' ' + h + '" width="' + w + '" height="' + h + '" role="img" aria-label="Light curve of the night">' +
       '<clipPath id="' + clip + '"><rect width="' + w + '" height="' + h + '"/></clipPath>' +
       '<line class="rule" x1="0" x2="' + w + '" y1="' + f(y(1)) + '" y2="' + f(y(1)) + '"/>' +
       [tr.ingress, tr.egress].map(t => '<line class="edge" x1="' + f(x(ms(t))) + '" x2="' + f(x(ms(t))) + '" y1="2" y2="' + (h - 2) + '"/>').join('') +
-      '<g clip-path="url(#' + clip + ')">' + pointsOf(r).map(e => '<circle class="pt" cx="' + f(x(e[0])) + '" cy="' + f(y(e[1])) + '" r="1.4"/>').join('') +
-      '<path class="pred" d="M0 ' + f(y(1)) + model.points.map(e => 'L' + f(x(e[0])) + ' ' + f(y(e[1]))).join('') + 'L' + w + ' ' + f(y(1)) + '"/></g>' +
+      frames + '<g clip-path="url(#' + clip + ')">' + (pts || []).map(e => '<circle class="pt" cx="' + f(x(e[0])) + '" cy="' + f(y(e[1])) + '" r="1.4"/>').join('') +
+      '<path class="pred' + (pts ? '' : ' soon') + '" d="M0 ' + f(y(1)) + model.points.map(e => 'L' + f(x(e[0])) + ' ' + f(y(e[1]))).join('') + 'L' + w + ' ' + f(y(1)) + '"/></g>' +
       (calm ? '' : '<circle class="phd" r="4"/>') + '</svg>';
     return {t0: t0, t1: t1, x: x, y: y, flux: model.at, dot: el.querySelector('.phd'), edge: el.querySelector('clipPath rect')};
   }
@@ -460,14 +467,14 @@
     const n = state.nights.find(x => x.id === selected), box = $('ambient'), old = Array.from(box.children);
     scene = null;
     if (!n || !detail) { box.innerHTML = ''; return; }
-    const r = detail.report || {}, tr = r.transit, g = gradeOf(n), c = tone(tr, g), curve = tr && pointsOf(r);
+    const r = detail.report || {}, tr = r.transit, g = gradeOf(n), c = tone(tr, g);
     const view = document.createElement('div');
     view.className = 'a-scene';
     view.style.setProperty('--tone', rgb(c));
     view.innerHTML = '<canvas class="a-sky"></canvas><canvas></canvas><canvas></canvas><canvas></canvas>' +
       '<div class="a-top"><div class="mark">' + $('bar').querySelector('.mark').innerHTML + '</div>' +
       '<span class="a-status"></span><span class="tools">' + $('tools').innerHTML + '</span></div>' +
-      '<div class="a-foot"><div class="a-who"><div><span class="label">' + day(n.first_frame, true) + ' · <span class="' + g + '-t">' + WORD[g] + '</span></span>' +
+      '<div class="a-foot"><div class="a-who"><div><span class="label">' + day(n.first_frame, true) + ' · <span class="a-state ' + g + '-t">' + WORD[g] + '</span></span>' +
       '<h1 class="name">' + esc(planet(n)) + '</h1></div><div class="a-stats">' + stats(n, r).filter(Boolean).slice(0, 2).map(stat).join('') + '</div></div>' +
       '<div class="chart a-trace"></div></div>';
     box.appendChild(view);
@@ -493,7 +500,8 @@
       at(body, x, py, room);
       paintPlanet(night, pr * px, dx / far, dy / far, lit, c);
     };
-    const line = curve ? trace(view.querySelector('.a-trace'), n, r) : null;
+    // a night still in work has no curve yet: its predicted transit plays instead
+    const line = tr && (pointsOf(r) || !n.grade) ? trace(view.querySelector('.a-trace'), n, r) : null;
     if (line && line.dot) {
       scene = {start: performance.now(), t0: line.t0, t1: line.t1, alive: () => line.dot.isConnected, next: advance,
                step(u, t) {
@@ -510,17 +518,26 @@
   }
 
   function ambientStatus() {
-    const top = $('ambient').querySelector('.a-scene:last-child .a-top');
-    if (!top) return;
-    top.querySelector('.a-status').innerHTML = statusText();
-    top.classList.toggle('busy', !!state.activity);
+    const view = $('ambient').querySelector('.a-scene:last-child'), n = state.nights.find(x => x.id === selected);
+    if (!view) return;
+    view.querySelector('.a-status').innerHTML = statusText();
+    view.querySelector('.a-top').classList.toggle('busy', !!state.activity);
+    if (!n || n.grade) return;
+    const a = state.activity, live = a && a.night === n.id ? a : null;      // a night in work: what is being done, and the frames in hand
+    const here = live && live.stage === 'fetch' ? live.done : (live && live.stage !== 'sample') || n.stage === 'fetched' ? n.frames : 0;
+    const word = view.querySelector('.a-state');
+    word.textContent = live ? STAGE[live.stage] + (live.total ? ' ' + live.done + '/' + live.total : '') : 'Queued';
+    word.classList.toggle('on', !!live);
+    view.querySelectorAll('.fr').forEach((tick, i) => tick.classList.toggle('in', i < here));
   }
 
-  function advance() {                      // one replay each, through the nights that have a curve
-    const pool = state.nights.filter(n => n.stage === 'done' && (n.grade === 'good' || n.grade === 'improvable')).map(n => n.id);
+  function advance() {                      // one replay each, through the nights that have a curve and the one in work
+    const live = state.activity && state.activity.night;
+    const pool = state.nights.filter(n => n.id === live || (n.stage === 'done' && (n.grade === 'good' || n.grade === 'improvable'))).map(n => n.id);
     const next = pool[(pool.indexOf(selected) + 1) % pool.length];
-    if (next && next !== selected) select(next);
-    else scene.start = performance.now();
+    if (next && next !== selected) return select(next);
+    scene.start = performance.now();        // the only one: it plays again
+    scene.over = false;
   }
 
   function setMinimal(on) {

@@ -115,6 +115,9 @@ a.pill { display: inline-block; text-decoration: none; }
 .chart .rule { stroke: var(--rule); stroke-width: 1; }
 .chart .tick { stroke: var(--star-3); stroke-width: 1; }
 .chart .pred { fill: none; stroke: var(--tone, var(--sun)); stroke-width: 1.4; stroke-linejoin: round; }
+.chart .pred.soon { stroke-dasharray: 1 6; stroke-linecap: round; }
+.chart .fr { stroke: var(--star-3); stroke-width: 1; opacity: .4; transition: stroke .6s, opacity .6s; }
+.chart .fr.in { stroke: var(--tone, var(--sun)); opacity: 1; }
 .chart .pt { fill: var(--star); opacity: .38; }
 .chart .bin { fill: var(--star); }
 .chart .sky { stroke: var(--star); opacity: .7; stroke-linecap: round; }
@@ -226,6 +229,7 @@ a.pill { display: inline-block; text-decoration: none; }
 .a-top, .a-foot { position: absolute; left: 0; right: 0; padding-left: max(30px, env(safe-area-inset-left, 0px)); padding-right: max(30px, env(safe-area-inset-right, 0px)); }
 .a-top { top: 0; padding-top: 26px; display: flex; align-items: center; gap: 18px; }
 .a-top .tools { margin-left: auto; }
+.a-state.on { color: var(--star-2); }
 .a-status { color: var(--star-2); font-size: 14px; }
 .a-status b { color: var(--star); font-weight: 400; }
 .a-status .of { margin-left: 14px; color: var(--star-3); }
