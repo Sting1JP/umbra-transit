@@ -3,7 +3,6 @@ import json
 import os
 import sys
 import threading
-import time
 from datetime import datetime, timezone
 
 import numpy as np
@@ -432,6 +431,41 @@ def test_an_outage_holds_the_autopilot_without_blaming_the_night(tmp_path, monke
     assert sum('waiting' in row['message'] for row in store.recent(10)) == 1       # said once
 
 
+def test_a_busy_server_is_left_alone(tmp_path, monkeypatch):
+    class Reply:
+        is_redirect, content = False, b'ok'
+
+        def __init__(self, code, **headers):
+            self.status_code, self.headers = code, headers
+    replies, sent, clock = [Reply(503), Reply(200), Reply(429, **{'Retry-After': '7200'}), Reply(200)], [], [1e9]
+    monkeypatch.setattr(net.requests, 'request', lambda *a, **k: sent.append(a[1]) or replies.pop(0))
+    monkeypatch.setattr(net.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(net, '_paused', {})
+    url = 'https://mo-www.cfa.harvard.edu/ImageDirectory/WASP-50261026053928.FITS'
+    with pytest.raises(net.Busy, match='HTTP 503 .* 10 min'):
+        net.get(url)
+    with pytest.raises(net.Busy):                           # inside the pause nothing is sent
+        net.get(url)
+    assert len(sent) == 1
+    assert net.get('https://www.exoclock.space/database/planets_json') == b'ok'              # another host is not held
+    clock[0] += 601
+    with pytest.raises(net.Busy, match='HTTP 429 .* 120 min'):                               # the server's own wish, when longer
+        net.get(url)
+    clock[0] += 7201
+    assert net.get(url) == b'ok' and 'mo-www.cfa.harvard.edu' not in net._paused             # answered: the count starts over
+
+    settings = Settings(data=tmp_path, fetch_pause=0)
+    store, tries = Store(settings.db_path), []
+    frame = dict(name='WASP-50261026053928', time='2026-10-26T05:39:28+00:00', target='WASP-50', telescope='Cecilia',
+                 exposure=60, preview_kb=1, weather=67)
+    store.save('wasp50-20261026', stage=NEW, first_frame=frame['time'], listing=dict(frames=[frame], darks=[], entry={}))
+    monkeypatch.setattr(net, 'get', lambda url, timeout=0: tries.append(url) or (_ for _ in ()).throw(net.Busy('HTTP 503')))
+    pipe = Pipeline(settings, store)
+    pipe.run_once()
+    night = store.get('wasp50-20261026')
+    assert len(tries) == 1 and pipe.hold == 'busy' and night['stage'] == NEW and night['failures'] == 0
+
+
 def test_one_autopilot_per_data_folder(tmp_path):
     first = claim(tmp_path, 8765)
     assert first and claim(tmp_path, 8766) is None
@@ -484,7 +518,7 @@ def test_a_planet_exoclock_cannot_predict_does_not_stop_the_others(tmp_path, mon
     pipe.refresh()
     assert asked == [30, 10]                                    # the whole directory first, then the recent part
     again = Pipeline(settings, store)                           # a restart: no read before it is due, and then a short one
-    assert time.time() - again.refreshed < settings.refresh_hours * 3600
+    assert settings.refresh_hours == 24 and not again.due()
     again.refresh()
     store._db.execute('UPDATE times SET ts = ts - 12 * 86400')  # after a long break the recent part would miss nights
     Pipeline(settings, store).refresh()

@@ -190,9 +190,6 @@ def make_handler(pipeline, port):
             match = _ACTION.match(self.path)
             if not (ipaddress.ip_address(self.client_address[0]).is_loopback and self.headers.get('X-Local-App') == '1'):
                 self._json(dict(error='forbidden'), 403)
-            elif self.path == '/api/check':
-                pipeline.wake()
-                self._json(dict(ok=True))
             elif self.path == '/api/form':
                 self._json(dict(ok=open_form()))
             elif self.path == '/api/uploads':

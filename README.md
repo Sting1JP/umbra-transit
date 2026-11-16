@@ -76,7 +76,7 @@ Nights that came out weak on 4.3.1 are redone once the newer EXOTIC is in use.
 - Umbra contacts six hosts, over HTTPS, and refuses redirects: the two MicroObservatory hosts, ExoClock, the NASA Exoplanet Archive, MAST, and AAVSO (only to read your public list of uploads). EXOTIC is a separate program and makes its own connections.
 - Frame names are checked before they become file names, and every frame must be a complete FITS file.
 - Only folders Umbra created are ever deleted.
-- To stay light on the MicroObservatory server, downloads run one at a time with a one-second pause, and the listing is read at most every six hours, also across restarts. Every request names Umbra, its version and this repository, so the people who run a server can see what it is and reach the author.
+- To stay light on the MicroObservatory server, the listing is read once a day, also across restarts, and frames are downloaded one at a time with a one-second pause, each of them once. If a server answers that it is busy (HTTP 429 or 5xx) or does not answer, Umbra leaves it alone for ten minutes, then twenty, and so on up to a day, or for as long as the server asks. Every request names Umbra, its version and this repository, so the people who run a server can see what it is and reach the author.
 - EXOTIC runs with no keyboard attached and a time limit, so a question or a stall ends the run.
 
 ## Code

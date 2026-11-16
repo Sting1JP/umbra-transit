@@ -43,7 +43,7 @@ class Settings:
     sample_pass: float = 0.6    # share of sampled frames that must be clear
     min_stars: int = 40         # fewer stars than this in the best frames means overcast
     fetch_pause: float = 1.0    # seconds between downloads
-    refresh_hours: float = 6    # how often the directory is read again
+    refresh_hours: float = 24   # the directory listing is read this often, also across restarts
     reject_keep_days: float = 2 # raw frames of lost nights are deleted after this
     max_full: int = 0           # full downloads per run (0 = no limit)
     observer: str = ''          # AAVSO observer code written into EXOTIC reports

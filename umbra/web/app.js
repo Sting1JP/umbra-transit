@@ -15,7 +15,7 @@
   };
 
   const WORD = {good: 'Good', improvable: 'Improvable', lost: 'Lost', waiting: 'Waiting'};
-  const HOLD = {offline: 'Offline. Trying again soon', disk: 'Disk nearly full. Downloads paused'};
+  const HOLD = {offline: 'Offline. Trying again soon', busy: 'The server is busy. Trying again later', disk: 'Disk nearly full. Downloads paused'};
   const STAGE = {directory: 'Reading the directory', sample: 'Sampling', fetch: 'Downloading', screen: 'Measuring', reduce: 'Reducing', fit: 'Fitting the transit'};
   const ID = /^[a-z0-9]+-\d{8}$/;
   const calm = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;

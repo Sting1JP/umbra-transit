@@ -57,7 +57,8 @@ def parse_listing(html):
 
 def listing(days):
     """Every frame listed for the last 10, 20 or 30 days: all targets, darks included. The directory's own
-    "ExoPlanets" search is not used because it leaves out more than half of the planets observed."""
+    "ExoPlanets" search is a chosen set of easier targets for another project; the transits observed with
+    Exoplanet Watch go beyond it, so the whole listing is read."""
     return parse_listing(net.get(LISTING_URL % days).decode('utf-8', 'replace'))
 
 
@@ -133,8 +134,9 @@ def download(frame, folder, retries=3):
                 fh.write(data)
             os.replace(dest + '.part', dest)
             return True
+        except net.Unreachable:                 # offline or a busy server: asking again at once would not help
+            raise
         except OSError as exc:
             error = exc
             time.sleep(2 * (attempt + 1))
-    kind = net.Unreachable if isinstance(error, net.Unreachable) else IOError
-    raise kind('%s: %s' % (frame.name, error))
+    raise IOError('%s: %s' % (frame.name, error))

@@ -37,7 +37,8 @@ def observations(nights):
         else:
             break
     if len(run) >= 3:
-        notes.append('The directory\'s "%% clear" figure has read %d on every frame of the last %d nights (since %s).'
+        notes.append('The directory\'s "%% clear" figure has read %d on every frame of the last %d nights (since %s). '
+                     'MicroObservatory knows it can stick, a fault on their server. Umbra never uses the figure.'
                      % (next(iter(run[0][1])), len(run), _day(run[-1][0]['first_frame'])))
     wrong = []
     for n, w in weather:

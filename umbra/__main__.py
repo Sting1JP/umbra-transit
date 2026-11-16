@@ -77,7 +77,8 @@ def main():
             webbrowser.open(url)
         return
     if a.once:
-        pipeline.refresh()
+        if pipeline.due():
+            pipeline.refresh()
         pipeline.run_once()
         for n in store.all():
             print('%-18s %-8s %-10s %s' % (n['id'], n['stage'], n['grade'] or '-', n['headline'] or ''))

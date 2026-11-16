@@ -45,7 +45,7 @@ class Pipeline:
     def __init__(self, settings, store):
         self.settings, self.store = settings, store
         self.activity = None                # what the autopilot is doing right now, for the screen
-        self.hold = self._held = None       # why it is waiting: 'offline' or 'disk'
+        self.hold = self._held = None       # why it is waiting: 'offline', 'busy' or 'disk'
         self.refreshed = store.when('directory')        # a restart does not read the directory sooner than it was due
         self.asked_aavso = 0.0
         self._wake, self._stop = threading.Event(), threading.Event()
@@ -53,6 +53,10 @@ class Pipeline:
         settings.nights_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ discovery
+    def due(self):
+        """Whether the directory listing may be read again."""
+        return time.time() - self.refreshed > self.settings.refresh_hours * 3600
+
     def refresh(self):
         """Read the directory and record every transit run in it: a long series of frames on one target."""
         self.activity = dict(stage='directory')
@@ -259,6 +263,9 @@ class Pipeline:
             self.store.log(None, 'waiting, %s: %s' % (reason, detail))
         self.hold = self._held = reason
 
+    def _unreachable(self, exc):
+        self._pause('busy' if isinstance(exc, net.Busy) else 'offline', exc)
+
     def _gave_up(self, night):
         """Verdict fields for a night that failed three times."""
         age = datetime.now(timezone.utc) - datetime.fromisoformat(night['first_frame'])
@@ -271,7 +278,7 @@ class Pipeline:
         steps, self._held, self._full = 0, None, 0
         self.requeue()
         for row in self.store.all():
-            while not self._stop.is_set() and self._held != 'offline':
+            while not self._stop.is_set() and self._held not in ('offline', 'busy'):
                 night = self.store.get(row['id'])
                 if night['stage'] == DONE:
                     break
@@ -282,7 +289,7 @@ class Pipeline:
                 except InterruptedError:
                     break
                 except net.Unreachable as exc:              # no fault of the night: wait and try again
-                    self._pause('offline', exc)
+                    self._unreachable(exc)
                 except Exception as exc:                    # one bad night must not stop the others
                     failures = night['failures'] + 1
                     self.store.log(night['id'], 'error: %s' % exc)
@@ -312,12 +319,11 @@ class Pipeline:
     # ------------------------------------------------------------------ background worker
     def run_forever(self):
         while not self._stop.is_set():
-            due = time.time() - self.refreshed > self.settings.refresh_hours * 3600
-            for job in (self.refresh, self.run_once) if due else (self.run_once,):
+            for job in (self.refresh, self.run_once) if self.due() else (self.run_once,):
                 try:
                     job()
                 except net.Unreachable as exc:
-                    self._pause('offline', exc)
+                    self._unreachable(exc)
                 except Exception as exc:
                     self.store.log(None, 'error: %s' % exc)
                 self.activity = None
@@ -349,10 +355,6 @@ class Pipeline:
                 self.store.save(night['id'], uploaded=match[0].isoformat(timespec='seconds'))
                 found[night['id']] = match[1]
         return found
-
-    def wake(self):
-        self.refreshed = 0.0
-        self._wake.set()
 
     def stop(self):
         self._stop.set()
