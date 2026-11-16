@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import numpy as np
 import pytest
 
-from umbra import __version__, digest, directory, ephemeris, grade, net, reduce, screen
+from umbra import __version__, digest, directory, ephemeris, grade, net, reduce, screen, server, share
 from umbra.config import Settings
 from umbra.pipeline import Pipeline
 from umbra.server import _local_host, act, open_form
@@ -142,6 +142,31 @@ def fitted(depth=0.0172, depth_err=0.002, tc=2461329.8640, dip=0.017):
     flux = [m + (0.004 if i % 2 else -0.004) for i, m in enumerate(model)]
     return dict(tc_bjd=tc, tc_err=0.0015, depth=depth, depth_err=depth_err, scatter=0.012, comparison='#2 - [245, 87]', duration_h=2.5,
                 curve=dict(t=[], flux=flux, model=model))
+
+
+def test_share_rating_follows_how_well_the_dip_shows(tmp_path):
+    def night(scatter, **change):
+        fit = dict(fitted(), scatter=scatter, qc='PASS, KTMF 4.74 / 5.00', frames=100, dropped=0)
+        report = dict(fit=fit, transit=dict(TRANSIT, pre_min=60, post_min=60), sky={}, gap=dict(in_transit_min=0))
+        for key, value in change.items():
+            report[key] = dict(report[key], **value)
+        return report
+    rated = [share.rate(grade.GOOD, night(s)) for s in (0.005, 0.009, 0.016)]
+    assert [(r['dots'], r['reason']) for r in rated] == [(3, 'Clear dip, full baseline'), (2, 'Dip shows through some noise'),
+                                                         (1, 'Dip hard to see by eye')]
+    assert rated[0]['score'] > rated[1]['score'] > rated[2]['score']
+    # no rating at all: not good, EXOTIC unsure, a hole in the transit, a short baseline, timing or depth to check
+    assert share.rate(grade.IMPROVABLE, night(0.005)) is None
+    for change in (dict(fit=dict(qc='MARGINAL, KTMF 3.1 / 5.00')), dict(gap=dict(in_transit_min=21)), dict(transit=dict(post_min=15)),
+                   dict(fit=dict(tc_bjd=TRANSIT['tc_bjd'] + 0.005)), dict(fit=dict(depth=0.04))):
+        assert share.rate(grade.GOOD, night(0.005, **change)) is None
+
+    store = Store(tmp_path / 'umbra.sqlite')                    # the page gets the rating with each night, the best three marked
+    for i, scatter in enumerate((0.003, 0.004, 0.005, 0.0055)):
+        store.save('wasp10-2026111%d' % i, stage=DONE, grade=grade.GOOD, first_frame='2026-11-1%dT04:00:00+00:00' % i, report=night(scatter))
+    store.save('wasp10-20261115', stage=DONE, grade=grade.LOST, first_frame='2026-11-15T04:00:00+00:00', report=night(0.005))
+    nights = server.state(Pipeline(Settings(data=tmp_path), store))['nights']
+    assert [n['share'] and (n['share']['dots'], n['share'].get('top', False)) for n in nights] == [(3, True), (3, True), (3, True), (3, False), None]
 
 
 def test_fit_checks_accept_a_sound_result_and_catch_a_bad_one():

@@ -16,6 +16,8 @@ For each night it:
 4. runs EXOTIC on the clear frames, if EXOTIC is installed, and checks its answer before calling the night good;
 5. deletes the frames of lost nights after two days.
 
+Beside the share button, one to three small bars say how well a night's curve shows the dip to someone who just looks at it, and the three best nights are ringed in the row of nights. This is apart from the verdict: a night can be good to upload and still be a poor picture.
+
 It never uploads anything itself. Press Upload (or U) and it takes you through the good nights one at a time: it puts the two files in a folder of their own, opens AAVSO's form, and when you come back it finds the night on your public AAVSO page and says so. Nights that are already there are not offered again.
 
 ## Install

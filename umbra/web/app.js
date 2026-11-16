@@ -74,7 +74,7 @@
   // ---------------------------------------------------------------- thirty nights
   function renderStrip() {
     const live = state.activity && state.activity.night;
-    const key = selected + '|' + live + '|' + state.nights.map(n => n.id + gradeOf(n) + (n.uploaded ? 'u' : '')).join();
+    const key = selected + '|' + live + '|' + state.nights.map(n => n.id + gradeOf(n) + (n.uploaded ? 'u' : '') + (n.share && n.share.top ? 't' : '')).join();
     if (key === stripKey) return;
     if (stripKey) $('strip').classList.remove('boot');       // bars grow once, on first paint
     stripKey = key;
@@ -84,9 +84,10 @@
       const d = new Date(ms(n.first_frame)), g = gradeOf(n), m = d.toLocaleDateString('en-GB', {month: 'short', timeZone: 'UTC'});
       const head = m !== month ? '<em>' + m + '</em>' : '';
       month = m;
-      const on = i === at, tick = on || (i % 4 === 0 && Math.abs(i - at) > 1);
+      const on = i === at, tick = on || (i % 4 === 0 && Math.abs(i - at) > 1), top = n.share && n.share.top;
       return '<button class="n ' + (n.id === live ? 'live' : g) + (on ? ' on' : '') + (n.uploaded ? ' up' : '') + '" data-id="' + esc(n.id) + '" title="' +
-        esc(planet(n) + ' · ' + day(n.first_frame) + ' · ' + WORD[g].toLowerCase() + (n.uploaded ? ', uploaded' : '')) + '">' + head + '<i></i>' +
+        esc(planet(n) + ' · ' + day(n.first_frame) + ' · ' + WORD[g].toLowerCase() + (n.uploaded ? ', uploaded' : '') + (top ? ' · one of the best to share' : '')) +
+        '">' + head + '<i></i>' + (top ? '<u></u>' : '') +
         (tick ? '<b>' + d.getUTCDate() + '</b>' : '') + '</button>';
     }).join('');
     $('strip').querySelectorAll('.n i').forEach((el, i) => el.style.setProperty('--i', i));
@@ -576,7 +577,8 @@
       '<div class="head"><div><span class="label">Report · ' + day(n.first_frame, true) + '</span><h2>' + esc(planet(n)) + '</h2></div>' +
       '<button class="nav" id="close-report" aria-label="Close">✕</button></div>' +
       '<p class="say">' + sentence(n, r) + '</p><div class="chart" id="report-chart"></div>' +
-      (shareable(r) ? '<button class="pill" data-act="share"><span class="arrow">Copy image to share</span><span class="ok">Copied</span></button>' : '') +
+      (shareable(r) ? '<div class="share-row"><button class="pill" data-act="share"><span class="arrow">Copy image to share</span><span class="ok">Copied</span></button>' +
+        rated(n) + '</div>' : '') +
       '<div class="checks">' + v.checks.map(c => '<div class="check ' + esc(c.state) + '"><i></i><span>' +
         esc(c.label) + '</span><span class="val num">' + esc(c.value) + '</span></div>').join('') + '</div>' +
       '<div class="facts">' + facts.map(x => '<div><div class="label">' + esc(x[0]) + '</div><div class="v num">' + esc(x[1]) + '</div></div>').join('') + '</div></div>';
@@ -719,6 +721,9 @@
   }
 
   const shareable = r => !!(r && r.transit && pointsOf(r) && (r.fit || r.phot.depth != null));
+  // how well the curve shows the transit: one to three bars, with the reason on hover or tap. Unrated nights have no mark.
+  const rated = n => n && n.share ? '<button class="rate d' + n.share.dots + '" data-act="rate" aria-label="Worth sharing, ' + n.share.dots +
+    ' of 3: ' + esc(n.share.reason) + '"><i></i><i></i><i></i><span class="why">' + esc(n.share.reason) + '</span></button>' : '';
 
   function share() {                        // onto the clipboard, or saved as a file where the browser will not copy images
     const n = state && state.nights.find(x => x.id === selected);
@@ -890,8 +895,11 @@
       detail = n ? await api.night(n.id) : null;
       heroKey = key;
       $('tools').querySelector('[data-act="share"]').hidden = !shareable(detail && detail.report);
+      $('tools').querySelector('.slot').innerHTML = rated(n);
       if (minimal) renderAmbient(fresh);
       else renderHero(fresh);
+      // the reason opens toward the middle of the screen, wherever the header has wrapped the tools to
+      document.querySelectorAll('.tools .rate').forEach(el => el.classList.toggle('left', el.getBoundingClientRect().left < innerWidth / 2));
     } else if (minimal) {
       ambientStatus();
     } else if (n && n.id === live && $('say')) {
@@ -916,6 +924,7 @@
     if (e.target.closest('#go-live')) { follow = true; closeReport(); return refresh(); }
     if (e.target.closest('#open-report')) return openReport();
     if (e.target.closest('[data-act="share"]')) return share();
+    if (e.target.closest('[data-act="rate"]')) return e.target.closest('[data-act="rate"]').classList.toggle('open');
     if (e.target.closest('[data-act="upload"]')) return openUpload();
     if (e.target.closest('[data-act="close-upload"]')) return closeUpload();
     const step = upload && e.target.closest('#upload [data-act]');

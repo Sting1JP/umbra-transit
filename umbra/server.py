@@ -20,9 +20,10 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import __version__, digest
+from . import __version__, digest, share
 from .config import FORM_URL, KEEP_DAYS, NAME, SLUG
 from .directory import ID_PATTERN
+from .grade import GOOD
 
 WEB = Path(__file__).parent / 'web'
 STATIC = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.css': ('app.css', 'text/css; charset=utf-8'),
@@ -42,10 +43,31 @@ def summary(night, now=None):
     return dict({k: night[k] for k in _SUMMARY}, days_left=round(KEEP_DAYS - age, 1))
 
 
+_rated = {}     # night id -> (when the night last changed, its share rating): the full report is read once per change
+
+
+def ratings(pipeline, rows):
+    """The share rating of every night that has one, by id, with the three best marked."""
+    found = {}
+    for row in rows:
+        if row['grade'] != GOOD:
+            continue
+        if _rated.get(row['id'], (None,))[0] != row['updated']:
+            _rated[row['id']] = (row['updated'], share.rate(row['grade'], pipeline.store.get(row['id'])['report'] or {}))
+        if _rated[row['id']][1]:
+            found[row['id']] = dict(_rated[row['id']][1])
+    for nid in sorted(found, key=lambda i: -found[i]['score'])[:3]:
+        found[nid]['top'] = True
+    return found
+
+
 def state(pipeline):
     again = pipeline.refreshed + pipeline.settings.refresh_hours * 3600 - time.time()      # until the directory is read again
+    rows = pipeline.store.all()
+    rated = ratings(pipeline, rows)
     return dict(name=NAME, version=__version__, activity=pipeline.activity, hold=pipeline.hold, observer=pipeline.settings.observer, form=FORM_URL,
-                next_look=max(0, round(again)) if pipeline.refreshed else None, nights=[summary(n) for n in pipeline.store.all()])
+                next_look=max(0, round(again)) if pipeline.refreshed else None,
+                nights=[dict(summary(n), share=rated.get(n['id'])) for n in rows])
 
 
 def log(pipeline):
