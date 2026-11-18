@@ -327,8 +327,15 @@ class Pipeline:
                 except Exception as exc:
                     self.store.log(None, 'error: %s' % exc)
                 self.activity = None
-            self._wake.wait(120 if self.hold == 'offline' else 600)
+            self._wake.wait(self.nap())
             self._wake.clear()
+
+    def nap(self):
+        """Seconds until the next pass: the usual pause, or less when the listing falls due sooner.
+        An overdue listing (its last read failed) waits the usual pause, so a failing server is not asked at once."""
+        usual = 120 if self.hold == 'offline' else 600
+        due_in = self.refreshed + self.settings.refresh_hours * 3600 - time.time()
+        return min(usual, due_in + 1) if due_in > 0 else usual
 
     def find_uploads(self):
         """Mark the good nights that are already on the observer's public AAVSO page.

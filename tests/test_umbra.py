@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 
 import numpy as np
@@ -544,6 +545,12 @@ def test_a_planet_exoclock_cannot_predict_does_not_stop_the_others(tmp_path, mon
     assert asked == [30, 10]                                    # the whole directory first, then the recent part
     again = Pipeline(settings, store)                           # a restart: no read before it is due, and then a short one
     assert settings.refresh_hours == 24 and not again.due()
+    assert again.nap() == 600                                   # idle: the usual pause
+    again.refreshed = time.time() - 24 * 3600 + 30              # due in half a minute: woken for it, not ten minutes later
+    assert 30 < again.nap() <= 32
+    again.refreshed = time.time() - 25 * 3600                   # overdue because the read failed: the usual pause again
+    assert again.nap() == 600
+    again.refreshed = time.time()
     again.refresh()
     store._db.execute('UPDATE times SET ts = ts - 12 * 86400')  # after a long break the recent part would miss nights
     Pipeline(settings, store).refresh()
