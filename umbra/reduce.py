@@ -29,6 +29,9 @@ CREDIT = ('These observations were conducted with MicroObservatory, a robotic te
           'supported by NASA under award number NNX16AC65A to the Space Telescope Science Institute.')
 MIN_FRAMES = 25
 READ = 5            # raised when EXOTIC's files are read or checked differently, so stored fits are read again
+FIRST, SECOND = 'reduce', 'reduce-ensemble'     # each try's working folder; the second never overwrites the first
+# the second try: EXOTIC combines up to five comparison stars of its own choosing (forcing Umbra's five did worse)
+ENSEMBLE = {'use_ensemble_photometry_rather_than_single_comp': True, 'maximum_number_of_ensemble_comparisons_for_transit': 5}
 NEWER_HELPS = ('No clear dip', 'Weak detection', 'Depth off', 'No comparison star')     # see verdict()
 _NUM = r'([-+]?\d+\.?\d*(?:[eE][-+]?\d+)?)'
 _FULL_PATH = re.compile(r'"(?:/|[A-Za-z]:\\)[^"]*[/\\]([^"/\\]+)"')    # a quoted absolute path, Unix or Windows; group 1 is the file name
@@ -67,15 +70,17 @@ def _left_out(count):
     return '%d clouded or damaged frame%s left out' % (count, '' if count == 1 else 's')
 
 
-def prepare(folder, report, entry, observer, newer=False):
-    """Lay out the working folder: the clear frames, the settings file, an empty output folder."""
+def prepare(folder, report, entry, observer, newer=False, ensemble=False):
+    """Lay out the working folder: the clear frames, the settings file, an empty output folder.
+    ensemble: the second try, in its own folder. A first try clears any earlier second one, which no longer applies."""
     series, phot = report['series'], report['phot']
     keep = [i for i, cloudy in enumerate(series['cloudy']) if not cloudy]
     if len(keep) < MIN_FRAMES:
         raise ValueError('only %d clear frames' % len(keep))
-    work = Path(folder) / 'reduce'
-    if work.exists():
-        shutil.rmtree(work)
+    work = Path(folder) / (SECOND if ensemble else FIRST)
+    for old in (work,) if ensemble else (work, Path(folder) / SECOND):
+        if old.exists():
+            shutil.rmtree(old)
     frames, out = work / 'frames', work / 'out'
     frames.mkdir(parents=True)
     out.mkdir()
@@ -126,8 +131,8 @@ def prepare(folder, report, entry, observer, newer=False):
             'Star Metallicity (+) Uncertainty': unc('meta_e1', 0.1), 'Star Metallicity (-) Uncertainty': -unc('meta_e2', 0.1),
             'Star Surface Gravity (log(g))': entry['logg'],
             'Star Surface Gravity (+) Uncertainty': unc('logg_e1', 0.1), 'Star Surface Gravity (-) Uncertainty': -unc('logg_e2', 0.1)},
-        'optional_info': {'Pixel Scale (Ex: 5.21 arcsecs/pixel)': 5.21,
-                          'Filter Minimum Wavelength (nm)': 350, 'Filter Maximum Wavelength (nm)': 850}}
+        'optional_info': dict({'Pixel Scale (Ex: 5.21 arcsecs/pixel)': 5.21,
+                               'Filter Minimum Wavelength (nm)': 350, 'Filter Maximum Wavelength (nm)': 850}, **(ENSEMBLE if ensemble else {}))}
     (work / 'inits.json').write_text(json.dumps(settings, indent=2))
     return work, dict(frames=len(keep), dropped=dropped)
 
@@ -202,6 +207,8 @@ def _collect(work, transit):
     start = datetime.fromisoformat(transit['mid'].rstrip('Z'))             # BJD_TDB -> UTC through the predicted mid-time
     iso = lambda bjd: (start + timedelta(days=bjd - transit['tc_bjd'])).isoformat(timespec='seconds') + 'Z'
     comp = get('Transit Fit Comparison Star', 'Best Comparison Star') or 'None'
+    if comp.strip().lower() == 'ensemble':                                  # e.g. "5 of 5: Comp 1, Comp 2, ..."
+        comp = 'ensemble, ' + (p.get('Comparison ensemble members used') or '?').split(':')[0]
     log = work / 'exotic.log'
     version = re.search(r'Version ([^\s+]+)', log.read_text(errors='replace')) if log.exists() else None
     quality = ', '.join(v for v in (p.get('Transit detection QC'), p.get('KTMF') and 'KTMF ' + p['KTMF']) if v)
@@ -213,6 +220,7 @@ def _collect(work, transit):
                 scatter=_pair(get('Residual scatter around full model fit', 'Scatter in the residuals of the lightcurve fit is'))[0] / 100,
                 duration_h=(_pair(p.get('Transit Duration (day)'))[0] or 0) * 24,
                 comparison=None if comp.strip().lower().startswith('none') else comp, exotic=version.group(1) if version else None,
+                mode='ensemble' if comp.startswith('ensemble') else 'single',
                 qc=quality or None,                                          # EXOTIC's own verdict; the release has none
                 curve=dict(t=[iso(r[0]) for r in rows], flux=[round(r[2], 4) for r in rows], model=[round(r[4], 5) for r in rows]),
                 files=dict(report=str(report or ''), plot=str(plot or ''), folder=str(report.parent if report else out)))

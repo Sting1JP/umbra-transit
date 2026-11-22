@@ -126,10 +126,10 @@ class Pipeline:
             if directory.download(frame, str(folder)):
                 time.sleep(self.settings.fetch_pause)
 
-    def _finish(self, nid, report, verdict):
+    def _finish(self, nid, report, verdict, said=None):
         report['verdict'] = verdict
         self.store.save(nid, stage=DONE, grade=verdict['grade'], headline=verdict['headline'], report=report)
-        self.store.log(nid, '%s: %s' % (verdict['grade'], verdict['headline']))
+        self.store.log(nid, said or '%s: %s' % (verdict['grade'], verdict['headline']))
 
     def step(self, night):
         """Advance one night by one stage."""
@@ -171,56 +171,107 @@ class Pipeline:
             self._reduce(nid, night['report'], entry, folder)
         return True
 
-    def _reduce(self, nid, report, entry, folder):
-        """Run EXOTIC on a screened night and settle the verdict on its checked result."""
-        screened, used, fit = report['verdict'], dict(frames=0, dropped=0), None
-        cmd = reduce.command()
-        if not cmd:                                         # EXOTIC was removed since the night was screened
-            return self._finish(nid, report, screened)
-        self.activity = dict(night=nid, stage='reduce')
-        newer = reduce.newer(cmd)
+    def _exotic(self, nid, report, entry, folder, cmd, newer, ensemble=False):
+        """One EXOTIC run on a night. Returns (fit, reason): the fit read from its files, or why there is none."""
+        stage = 'second' if ensemble else 'reduce'
+        self.activity = dict(night=nid, stage=stage)
+        def tick(done, total):                              # frames are counted while aligning; the fit has no counter
+            self.activity = dict(night=nid, stage=stage, done=done, total=total) if done < total \
+                else dict(night=nid, stage='second' if ensemble else 'fit')
         try:
-            work, used = reduce.prepare(folder, report, entry, self.settings.observer, newer)
-            def tick(done, total):                          # frames are counted while aligning; the fit has no counter
-                self.activity = dict(night=nid, stage='reduce', done=done, total=total) if done < total else dict(night=nid, stage='fit')
+            work, used = reduce.prepare(folder, report, entry, self.settings.observer, newer, ensemble)
             finished, reason = reduce.run(cmd, work, self.settings.reduce_timeout, tick, self._stop, newer)
-            if finished:
-                fit = reduce.collect(work, report['transit'])
-                reason = None if fit else 'EXOTIC wrote no result'
+            fit = reduce.collect(work, report['transit']) if finished else None
+            reason = reason or (None if fit else 'EXOTIC wrote no result')
         except (ValueError, OSError, KeyError, TypeError) as exc:
-            reason = 'EXOTIC could not be set up: %s' % exc
+            fit, reason = None, 'EXOTIC could not be set up: %s' % exc
         if reason == 'stopped':
             raise InterruptedError
-        if fit:
-            final = self._judge(report, fit, used, newer)
-        else:
-            failed = dict(key='exotic', label='EXOTIC', state='fail', value=reason)
-            own = [c for c in screened['checks'] if c['key'] in grade.KEYS]      # without the checks of an earlier fit
-            final = dict(grade=grade.IMPROVABLE, headline='EXOTIC did not finish', remedy=reason, checks=own + [failed])
-            report['fit'] = None
-        self._finish(nid, report, final)
+        return (dict(fit, **used) if fit else None), reason
 
-    def _judge(self, report, fit, used, newer):
-        """The verdict on EXOTIC's result, checked against the screening."""
+    def _reduce(self, nid, report, entry, folder):
+        """Run EXOTIC on a screened night and settle the verdict on its checked result."""
+        cmd = reduce.command()
+        if not cmd:                                         # EXOTIC was removed since the night was screened
+            return self._finish(nid, report, report['verdict'])
+        newer = reduce.newer(cmd)
+        if report.pop('redo', None) == 'second' and report.get('fit') and newer:
+            return self._second(nid, report, entry, folder, cmd)
+        fit, reason = self._exotic(nid, report, entry, folder, cmd, newer)
+        for key in ('other_fit', 'second'):                 # a new first fit: an earlier second try no longer applies
+            report.pop(key, None)
+        if not fit:
+            own = [c for c in report['verdict']['checks'] if c['key'] in grade.KEYS]    # without the checks of an earlier fit
+            failed = dict(key='exotic', label='EXOTIC', state='fail', value=reason)
+            report['fit'] = None
+            return self._finish(nid, report, dict(grade=grade.IMPROVABLE, headline='EXOTIC did not finish', remedy=reason,
+                                                  checks=own + [failed]))
+        final = self._settle(report, fit)
+        self._finish(nid, report, final)                    # saved first, so a stop during the second try loses nothing
+        if final['grade'] == grade.IMPROVABLE and newer:
+            self._second(nid, report, entry, folder, cmd)
+
+    def _second(self, nid, report, entry, folder, cmd):
+        """EXOTIC once more on an improvable night, with its ensemble of comparison stars, on the same frames.
+        It replaces the first fit only when EXOTIC passes it and every check of Umbra's passes, the pointing check
+        included; otherwise the first fit and its verdict stand and the second try's files are removed."""
+        first = report['fit']
+        fit, reason = self._exotic(nid, report, entry, folder, cmd, True, ensemble=True)
+        if not fit:
+            report['other_fit'], report['second'] = None, dict(kept=False, value='ensemble did not finish: %s' % reason)
+        final = self._settle(report, first, fit)
+        kept = report['second']['kept']
+        if not kept:
+            shutil.rmtree(folder / reduce.SECOND, ignore_errors=True)
+            if report.get('other_fit'):
+                report['other_fit'] = dict(report['other_fit'], files={})
+        self._finish(nid, report, final, '%s: %s, after a second try with an ensemble' % (final['grade'], final['headline'])
+                     if kept else 'second try with an ensemble not used (%s)' % report['second']['value'].split(': ', 1)[-1])
+
+    def _judge(self, report, fit, newer):
+        """The verdict on one of EXOTIC's results, checked against the screening."""
         own = [c for c in report['verdict']['checks'] if c['key'] in grade.KEYS]    # without the checks of an earlier fit
         own = [c for c in own if c['key'] != 'pointing']
         moved = [c for c in [grade.pointing(report)] if c]          # judged afresh: older verdicts were made without it
         checks = reduce.check(fit, report['transit'], report.get('phot'))
-        checks.append(reduce.audit(fit['files']['report'], self.settings.observer, report.get('binning', '2x2')))
-        report['fit'] = dict(fit, **used)
+        checks.append(reduce.audit(fit['files'].get('report'), self.settings.observer, report.get('binning', '2x2')))
         held = [c for c in moved if c['state'] != 'ok']             # the fit cannot mend a jump in the transit
-        return dict(reduce.verdict(checks + held, used['dropped'], newer), checks=own + moved + checks)
+        return dict(reduce.verdict(checks + held, fit.get('dropped', 0), newer), checks=own + moved + checks)
+
+    def _settle(self, report, first, second=None):
+        """The verdict on the first fit, or on the ensemble's second try when that is better. The second is used only
+        when the first is not good, EXOTIC passes the second, and every check of Umbra's passes on it."""
+        verdict = self._judge(report, first, bool(first.get('qc')))
+        report['fit'] = first
+        if second:
+            other = self._judge(report, second, True)
+            if verdict['grade'] != grade.GOOD and other['grade'] == grade.GOOD and (second.get('qc') or '').upper().startswith('PASS'):
+                report['fit'], report['other_fit'], verdict = second, first, other
+                report['second'] = dict(kept=True, value='ensemble')
+            else:
+                why = 'first fit good' if verdict['grade'] == grade.GOOD else other['headline'] if other['grade'] != grade.GOOD \
+                    else "no check from EXOTIC"
+                report['other_fit'], report['second'] = second, dict(kept=False, value='ensemble not used: ' + why)
+        if report.get('second'):
+            tried = report['second']
+            verdict['checks'] = verdict['checks'] + [dict(key='second', label='Second try', state='ok' if tried['kept'] else 'warn',
+                                                          value=tried['value'])]
+        return verdict
 
     def _reread(self, night, report):
         """Read EXOTIC's files for a finished night again, after a change in how they are read. EXOTIC is not run."""
-        old = report['fit']
-        fit = reduce.collect(self.folder(night['id']) / 'reduce', report['transit'])
-        if fit:
-            used = dict(frames=old.get('frames', 0), dropped=old.get('dropped', 0))
-            self._finish(night['id'], report, self._judge(report, fit, used, bool(fit.get('qc'))))
-        else:                                               # the files are gone: keep the fit, and do not ask again
+        old, folder = report['fit'], self.folder(night['id'])
+        used = dict(frames=old.get('frames', 0), dropped=old.get('dropped', 0))
+        read = lambda name: (lambda fit: dict(fit, **used) if fit else None)(reduce.collect(folder / name, report['transit']))
+        first = read(reduce.FIRST)
+        if not first:                                       # the files are gone: keep the fit, and do not ask again
             report['fit'] = dict(old, read=reduce.READ)
-            self.store.save(night['id'], report=report)
+            return self.store.save(night['id'], report=report)
+        second = read(reduce.SECOND) if (folder / reduce.SECOND).is_dir() else None
+        if report.get('second', {}).get('kept') and not second:     # the second try's files are gone: back to the first
+            report.pop('other_fit', None)
+            report['second'] = dict(kept=False, value='ensemble files gone')
+        self._finish(night['id'], report, self._settle(report, first, second))
 
     def requeue(self):
         """Send finished nights back a stage when something has changed since they were judged."""
@@ -257,6 +308,10 @@ class Pipeline:
             elif night['grade'] == grade.IMPROVABLE and report.get('fit') and not report['fit'].get('qc') \
                     and reduce.newer(reduce.command()):
                 self.store.save(night['id'], stage=SCREENED)        # weak on the 4.3.1 release, and a newer EXOTIC is here now
+            elif night['grade'] == grade.IMPROVABLE and report.get('fit') and 'second' not in report \
+                    and reduce.newer(reduce.command()):
+                report['redo'] = 'second'                           # judged before there was a second try: it gets one now
+                self.store.save(night['id'], stage=SCREENED, report=report)
 
     def _pause(self, reason, detail):
         if self.hold != reason:                             # said once, not at every retry

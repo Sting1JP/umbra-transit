@@ -267,6 +267,124 @@ def test_a_stored_fit_is_read_again_without_running_exotic(tmp_path, monkeypatch
     assert night['report']['fit']['read'] == reduce.READ and night['report']['fit']['dropped'] == 3
 
 
+ENTRY = dict(name='WASP-52b', star='WASP-52', ra_j2000='23:13:58.76', dec_j2000='+08:45:40.6', ephem_period=1.7497798,
+             ephem_mid_time=2455793.68143, rp_over_rs=0.1646, sma_over_rs=7.38, inclination=85.35, teff=5000, logg=4.5)
+
+
+def screened_night(folder, jump=False):
+    """A screened night with 40 clear frames on disk; jump: the telescope re-points in the middle of the transit."""
+    t = ['2026-11-08T%02d:%02d:00Z' % (7 + k // 20, 3 * (k % 20)) for k in range(40)]
+    files = ['WASP-52261108%02d%02d00.FITS.gz' % (7 + k // 20, 3 * (k % 20)) for k in range(40)]
+    for name in files:
+        (folder / name).write_bytes(b'x')
+    return dict(result(transit=dict(TRANSIT, ingress='2026-11-08T07:30:00Z', egress='2026-11-08T08:30:00Z'),
+                       phot=dict(depth=0.019, depth_err=0.003, x=300, y=200, comps=[[100, 100], [400, 300]],
+                                 dx=[0] * 20 + [90 if jump else 0] * 20, dy=[0] * 40)),
+                series=dict(t=t, file=files, cloudy=[False] * 40), verdict=dict(grade=grade.GOOD, headline='Transit recovered', checks=[]))
+
+
+def fake_exotic(qc, runs):
+    """Stands in for EXOTIC: writes its result files, with qc[mode] as its own check, mode 'single' or 'ensemble'."""
+    def run(cmd, work, timeout, progress=None, stop=None, newer=False):
+        info = json.loads((work / 'inits.json').read_text())['optional_info']
+        mode = 'ensemble' if info.get('use_ensemble_photometry_rather_than_single_comp') else 'single'
+        runs.append(mode)
+        out = work / 'out' / 'AAVSO_Files'
+        out.mkdir(parents=True)
+        comparison = {'single': '#2 - [400.0, 300.0]', 'ensemble': 'ensemble'}[mode]
+        (work / 'out' / 'FinalParams_WASP-52b.json').write_text(json.dumps({'FINAL PLANETARY PARAMETERS': {
+            'Transit detection QC': qc[mode], 'KTMF': '4.30 / 5.00' if qc[mode] == 'PASS' else '3.40 / 5.00',
+            'Mid-Transit Time (Tmid) best-fit with adjusted uncertainty': '%.4f +/- 0.0017 BJD_TDB' % (TRANSIT['tc_bjd'] + (0.001 if mode == 'single' else -0.002)),
+            'Radius-ratio area depth (Rp/R*)^2': '2.0 +/- 0.5 [%]', 'Observable model transit depth': '1.9 +/- 0.5 [%]',
+            'Prior observable model transit depth': '2.10 +/- 0.06 [%]', 'Transit depth red-noise uncertainty': '+/- 0.21 %',
+            'Residual scatter around full model fit': '0.74 %', 'Transit Fit Comparison Star': comparison,
+            'Comparison ensemble members used': '4 of 5: Comp 1, Comp 2, Comp 3, Comp 5'}}))
+        (out / 'FinalLightCurve_WASP-52b.csv').write_text(''.join(
+            '%.4f, 0, %.4f, 0.01, %.4f, 1.1\n' % (2461329.80 + k / 400, flux + 0.002 * (-1) ** k, flux)
+            for k, flux in enumerate([1.0] * 12 + [0.981] * 16 + [1.0] * 12)))
+        (out / 'AAVSO_WASP-52b.txt').write_text('#TYPE=EXOPLANET\n#OBSCODE=SSDB\n#BINNING=2x2\n#MODE=%s\n' % mode + '2461329.8,0.99,0.01,1.1,1.0\n' * 40)
+        return True, None
+    return run
+
+
+def test_the_second_try_asks_exotic_for_its_ensemble_in_its_own_folder(tmp_path):
+    report = screened_night(tmp_path)
+    first, _ = reduce.prepare(tmp_path, report, ENTRY, 'SSDB', newer=True)
+    second, used = reduce.prepare(tmp_path, report, ENTRY, 'SSDB', newer=True, ensemble=True)
+    options = lambda work: json.loads((work / 'inits.json').read_text())['optional_info']
+    assert (first.name, second.name, used['frames']) == (reduce.FIRST, reduce.SECOND, 40)
+    assert options(second)['use_ensemble_photometry_rather_than_single_comp'] is True
+    assert options(second)['maximum_number_of_ensemble_comparisons_for_transit'] == 5
+    assert 'use_exactly_the_comps_provided' not in options(second)      # EXOTIC chooses the members; forcing Umbra's did worse
+    assert not set(reduce.ENSEMBLE) & set(options(first)) and (first / 'inits.json').exists()     # the first is left as it was
+    reduce.prepare(tmp_path, report, ENTRY, 'SSDB', newer=True)         # a new first try: the old second no longer applies
+    assert not second.exists()
+
+
+@pytest.mark.parametrize('case', ['kept', 'not passed', 'moved', 'good first'])
+def test_a_second_try_is_used_only_when_it_passes_everything(tmp_path, monkeypatch, case):
+    qc = dict(single='PASS' if case == 'good first' else 'MARGINAL', ensemble='MARGINAL' if case == 'not passed' else 'PASS')
+    runs, settings = [], Settings(data=tmp_path, observer='SSDB')
+    monkeypatch.setattr(reduce, 'command', lambda: ['exotic'])
+    monkeypatch.setattr(reduce, 'newer', lambda cmd: True)
+    monkeypatch.setattr(reduce, 'run', fake_exotic(qc, runs))
+    store = Store(settings.db_path)
+    pipe = Pipeline(settings, store)
+    folder = pipe.folder('wasp52-20261108')
+    report = screened_night(folder, jump=case == 'moved')
+    store.save('wasp52-20261108', stage=SCREENED, first_frame='2026-11-08T07:00:00+00:00', report=report)
+    pipe._reduce('wasp52-20261108', report, ENTRY, folder)
+    night = store.get('wasp52-20261108')
+    r, rows = night['report'], {c['key']: c for c in night['report']['verdict']['checks']}
+    if case == 'good first':                                    # never on a good night
+        assert runs == ['single'] and night['grade'] == grade.GOOD and 'second' not in rows and 'other_fit' not in r
+        return
+    assert runs == ['single', 'ensemble']
+    first_file = folder / reduce.FIRST / 'out' / 'AAVSO_Files' / 'AAVSO_WASP-52b.txt'
+    assert '#MODE=single' in first_file.read_text()             # the first fit's AAVSO file is never overwritten
+    if case == 'kept':
+        assert (night['grade'], r['fit']['mode'], r['other_fit']['mode']) == (grade.GOOD, 'ensemble', 'single')
+        assert r['fit']['comparison'] == 'ensemble, 4 of 5' and (rows['second']['state'], rows['second']['value']) == ('ok', 'ensemble')
+        assert reduce.SECOND in r['fit']['files']['report'] and (folder / reduce.SECOND).is_dir()
+    else:                                                       # EXOTIC unsure, or the telescope moved: the first fit stands
+        assert (night['grade'], r['fit']['mode'], r['other_fit']['mode'], r['other_fit']['files']) == (grade.IMPROVABLE, 'single', 'ensemble', {})
+        assert night['headline'] == 'EXOTIC doubts its fit'          # the first fit's verdict, unchanged
+        why = grade.MOVED if case == 'moved' else 'EXOTIC doubts its fit'
+        assert (rows['second']['state'], rows['second']['value']) == ('warn', 'ensemble not used: ' + why)
+        assert not (folder / reduce.SECOND).exists()            # nothing kept that is not used
+
+
+def test_stored_nights_get_one_second_try(tmp_path, monkeypatch):
+    runs, settings = [], Settings(data=tmp_path, observer='SSDB')
+    monkeypatch.setattr(reduce, 'command', lambda: ['exotic'])
+    monkeypatch.setattr(reduce, 'newer', lambda cmd: True)
+    store = Store(settings.db_path)
+    pipe = Pipeline(settings, store)
+
+    def stored(nid, qc, **extra):                           # a night fitted once, by an Umbra from before second tries
+        folder = pipe.folder(nid)
+        report = screened_night(folder)
+        work, used = reduce.prepare(folder, report, ENTRY, 'SSDB', newer=True)
+        fake_exotic(dict(single=qc), [])(['exotic'], work, 60)
+        report['fit'] = dict(reduce.collect(work, report['transit']), **used)
+        report['verdict'] = pipe._settle(report, report['fit'])
+        store.save(nid, stage=DONE, grade=report['verdict']['grade'], headline=report['verdict']['headline'],
+                   first_frame='2026-11-08T07:00:00+00:00', listing=dict(frames=[], darks=[], entry=ENTRY), report=dict(report, **extra))
+    stored('wasp52-20261108', 'MARGINAL')
+    stored('wasp52-20261018', 'PASS')                                               # good: never redone
+    stored('wasp52-20261026', 'MARGINAL', second=dict(kept=False, value='ensemble not used: EXOTIC doubts its fit'))
+    monkeypatch.setattr(reduce, 'run', fake_exotic(dict(single='MARGINAL', ensemble='PASS'), runs))
+    pipe.requeue()
+    assert [n['id'] for n in store.all() if n['stage'] == SCREENED] == ['wasp52-20261108']     # each night tried once
+    pipe.run_once()
+    night = store.get('wasp52-20261108')
+    assert runs == ['ensemble']                                 # the first fit is not redone
+    assert (night['stage'], night['grade'], night['report']['fit']['mode']) == (DONE, grade.GOOD, 'ensemble')
+    assert 'redo' not in night['report']
+    pipe.requeue()
+    assert all(n['stage'] == DONE for n in store.all()) and runs == ['ensemble']
+
+
 def test_the_aavso_file_is_checked_and_its_own_lines_put_right(tmp_path):
     file = tmp_path / 'out' / 'AAVSO_Files' / 'AAVSO_WASP-11b.txt'
     file.parent.mkdir(parents=True)
@@ -516,14 +634,16 @@ def test_a_newer_exotic_gets_the_weak_nights_again(tmp_path, monkeypatch):
     store = Store(settings.db_path)
     pipe = Pipeline(settings, store)
     weak = dict(sky={}, rules=screen.RULES, phot={}, fit=dict(read=reduce.READ, depth=0.0086, qc=None))
-    sound = dict(weak, fit=dict(read=reduce.READ, depth=0.0157, qc='PASS, KTMF 4.00 / 5.00'))
+    sound = dict(weak, fit=dict(read=reduce.READ, depth=0.0157, qc='PASS, KTMF 4.00 / 5.00'), second=dict(kept=False, value='x'))
     for nid, report in (('wasp50-20261024', weak), ('wasp50-20261028', sound)):
         (pipe.folder(nid) / 'frame.FITS.gz').write_bytes(b'x')
         store.save(nid, stage=DONE, grade=grade.IMPROVABLE, first_frame='2026-10-24T06:45:36+00:00', report=report)
     monkeypatch.setattr(reduce, 'command', lambda: ['exotic'])
     monkeypatch.setattr(reduce, 'newer', lambda cmd: True)
     pipe.requeue()
-    assert store.get('wasp50-20261024')['stage'] == SCREENED and store.get('wasp50-20261028')['stage'] == DONE
+    redone = store.get('wasp50-20261024')
+    assert (redone['stage'], redone['report'].get('redo')) == (SCREENED, None)     # a full new reduction, not only a second try
+    assert store.get('wasp50-20261028')['stage'] == DONE
 
 
 def test_a_planet_exoclock_cannot_predict_does_not_stop_the_others(tmp_path, monkeypatch):
