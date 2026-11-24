@@ -63,7 +63,7 @@ UMBRA_EXOTIC=~/exotic-new/bin/exotic python -m umbra
 
 Nights that came out weak on 4.3.1 are redone once the newer EXOTIC is in use.
 
-With the newer EXOTIC, a night whose fit is not good gets one second try on the same frames, with EXOTIC combining several comparison stars of its own choosing. Umbra uses that second fit only if EXOTIC passes it and all of Umbra's checks pass; otherwise the first fit stands and the second try's files are removed. Good nights are never redone this way. On Umbra's own nights the second try came closer to other observers' times on most nights that were not good, and was no better on nights that already were.
+With the newer EXOTIC, a night whose fit is not good gets one second try on the same frames, with EXOTIC combining several comparison stars of its own choosing. Umbra uses that second fit only if EXOTIC passes it and all of Umbra's checks pass; otherwise the first fit stands and the second try's files are removed. Good nights are never redone this way, and neither are nights where clouds took the ingress or the egress: a night is only good if the points EXOTIC fitted include both ends of the transit and at least 20 minutes of baseline on each side. On Umbra's own nights the second try came closer to other observers' times on most nights that were not good, and was no better on nights that already were.
 
 ## Left running
 

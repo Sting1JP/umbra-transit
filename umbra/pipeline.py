@@ -208,8 +208,13 @@ class Pipeline:
                                                   checks=own + [failed]))
         final = self._settle(report, fit)
         self._finish(nid, report, final)                    # saved first, so a stop during the second try loses nothing
-        if final['grade'] == grade.IMPROVABLE and newer:
+        if final['grade'] == grade.IMPROVABLE and newer and self._mendable(final):
             self._second(nid, report, entry, folder, cmd)
+
+    @staticmethod
+    def _mendable(verdict):
+        """The ensemble works on the same frames: it cannot bring back an end of the transit that clouds took."""
+        return all(c['state'] == 'ok' for c in verdict['checks'] if c['key'] == 'ends')
 
     def _second(self, nid, report, entry, folder, cmd):
         """EXOTIC once more on an improvable night, with its ensemble of comparison stars, on the same frames.
@@ -309,7 +314,7 @@ class Pipeline:
                     and reduce.newer(reduce.command()):
                 self.store.save(night['id'], stage=SCREENED)        # weak on the 4.3.1 release, and a newer EXOTIC is here now
             elif night['grade'] == grade.IMPROVABLE and report.get('fit') and 'second' not in report \
-                    and reduce.newer(reduce.command()):
+                    and self._mendable(report['verdict']) and reduce.newer(reduce.command()):
                 report['redo'] = 'second'                           # judged before there was a second try: it gets one now
                 self.store.save(night['id'], stage=SCREENED, report=report)
 

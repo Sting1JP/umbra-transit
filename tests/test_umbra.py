@@ -1,6 +1,7 @@
 """Run with: python -m pytest tests"""
 import json
 import os
+import shutil
 import sys
 import threading
 import time
@@ -277,14 +278,15 @@ def screened_night(folder, jump=False):
     files = ['WASP-52261108%02d%02d00.FITS.gz' % (7 + k // 20, 3 * (k % 20)) for k in range(40)]
     for name in files:
         (folder / name).write_bytes(b'x')
-    return dict(result(transit=dict(TRANSIT, ingress='2026-11-08T07:30:00Z', egress='2026-11-08T08:30:00Z'),
+    return dict(result(transit=dict(TRANSIT, mid='2026-11-08T08:00:00Z', ingress='2026-11-08T07:30:00Z', egress='2026-11-08T08:30:00Z'),
                        phot=dict(depth=0.019, depth_err=0.003, x=300, y=200, comps=[[100, 100], [400, 300]],
                                  dx=[0] * 20 + [90 if jump else 0] * 20, dy=[0] * 40)),
                 series=dict(t=t, file=files, cloudy=[False] * 40), verdict=dict(grade=grade.GOOD, headline='Transit recovered', checks=[]))
 
 
-def fake_exotic(qc, runs):
-    """Stands in for EXOTIC: writes its result files, with qc[mode] as its own check, mode 'single' or 'ensemble'."""
+def fake_exotic(qc, runs, lost=()):
+    """Stands in for EXOTIC: writes its result files, with qc[mode] as its own check, mode 'single' or 'ensemble'.
+    One point every 3 min from 07:00 to 08:57, the transit from 07:30 to 08:30; lost: points clouds took."""
     def run(cmd, work, timeout, progress=None, stop=None, newer=False):
         info = json.loads((work / 'inits.json').read_text())['optional_info']
         mode = 'ensemble' if info.get('use_ensemble_photometry_rather_than_single_comp') else 'single'
@@ -300,8 +302,8 @@ def fake_exotic(qc, runs):
             'Residual scatter around full model fit': '0.74 %', 'Transit Fit Comparison Star': comparison,
             'Comparison ensemble members used': '4 of 5: Comp 1, Comp 2, Comp 3, Comp 5'}}))
         (out / 'FinalLightCurve_WASP-52b.csv').write_text(''.join(
-            '%.4f, 0, %.4f, 0.01, %.4f, 1.1\n' % (2461329.80 + k / 400, flux + 0.002 * (-1) ** k, flux)
-            for k, flux in enumerate([1.0] * 12 + [0.981] * 16 + [1.0] * 12)))
+            '%.6f, 0, %.4f, 0.01, %.4f, 1.1\n' % (TRANSIT['tc_bjd'] + (3 * k - 60) / 1440, model + 0.002 * (-1) ** k, model)
+            for k, model in enumerate([1.0] * 10 + [0.981] * 21 + [1.0] * 9) if k not in lost))
         (out / 'AAVSO_WASP-52b.txt').write_text('#TYPE=EXOPLANET\n#OBSCODE=SSDB\n#BINNING=2x2\n#MODE=%s\n' % mode + '2461329.8,0.99,0.01,1.1,1.0\n' * 40)
         return True, None
     return run
@@ -352,6 +354,44 @@ def test_a_second_try_is_used_only_when_it_passes_everything(tmp_path, monkeypat
         why = grade.MOVED if case == 'moved' else 'EXOTIC doubts its fit'
         assert (rows['second']['state'], rows['second']['value']) == ('warn', 'ensemble not used: ' + why)
         assert not (folder / reduce.SECOND).exists()            # nothing kept that is not used
+
+
+def test_a_fit_must_see_both_ends_of_the_transit(tmp_path):
+    report = screened_night(tmp_path)
+    work, _ = reduce.prepare(tmp_path, report, ENTRY, 'SSDB', newer=True)
+
+    def ends(lost=()):
+        shutil.rmtree(work / 'out')
+        (work / 'out').mkdir()
+        fake_exotic(dict(single='PASS'), [], lost)(['exotic'], work, 60)
+        fit = reduce.collect(work, report['transit'])
+        return next(c for c in reduce.check(fit, report['transit'], None) if c['key'] == 'ends')
+    pick = lambda c: (c['state'], c['why'], c['value'])
+    assert pick(ends()) == ('ok', None, '30 / 27 min baseline')
+    assert pick(ends(range(27, 36))) == ('fail', 'Egress not seen', 'egress in a 30 min gap')        # clouds 08:21 to 08:45
+    assert pick(ends(range(0, 12))) == ('fail', 'Ingress not seen', 'no points before ingress')
+    assert pick(ends(range(4, 10))) == ('warn', 'Short baseline', '12 / 27 min baseline')            # a few points short of ingress
+    assert pick(ends(range(8, 12))) == ('ok', None, '24 / 27 min baseline')                          # a 15 min gap at ingress is still seen
+    assert reduce._ends(dict(curve=dict(t=[])), report['transit']) is None                          # nothing to judge: no claim
+
+
+def test_a_lost_end_holds_the_night_and_gets_no_second_try(tmp_path, monkeypatch):
+    runs, settings = [], Settings(data=tmp_path, observer='SSDB')
+    monkeypatch.setattr(reduce, 'command', lambda: ['exotic'])
+    monkeypatch.setattr(reduce, 'newer', lambda cmd: True)
+    monkeypatch.setattr(reduce, 'run', fake_exotic(dict(single='PASS', ensemble='PASS'), runs, lost=range(27, 36)))
+    store = Store(settings.db_path)
+    pipe = Pipeline(settings, store)
+    folder = pipe.folder('wasp149-20261122')
+    report = screened_night(folder)
+    store.save('wasp149-20261122', stage=SCREENED, first_frame='2026-11-08T07:00:00+00:00', report=report)
+    pipe._reduce('wasp149-20261122', report, ENTRY, folder)
+    night = store.get('wasp149-20261122')
+    assert (night['grade'], night['headline']) == (grade.IMPROVABLE, 'Egress not seen')
+    assert runs == ['single']                                   # the ensemble uses the same frames: it cannot help
+    store.save('wasp149-20261122', listing=dict(frames=[], darks=[], entry=ENTRY))
+    pipe.requeue()
+    assert store.get('wasp149-20261122')['stage'] == DONE
 
 
 def test_stored_nights_get_one_second_try(tmp_path, monkeypatch):

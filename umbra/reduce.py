@@ -28,7 +28,8 @@ CREDIT = ('These observations were conducted with MicroObservatory, a robotic te
           'Harvard-Smithsonian Center for Astrophysics on behalf of NASA\'s Universe of Learning. This work is '
           'supported by NASA under award number NNX16AC65A to the Space Telescope Science Institute.')
 MIN_FRAMES = 25
-READ = 5            # raised when EXOTIC's files are read or checked differently, so stored fits are read again
+READ = 6            # raised when EXOTIC's files are read or checked differently, so stored fits are read again
+HOLE, SIDE = 15, 20     # minutes: the longest stretch without fitted points over ingress or egress, the least baseline per side
 FIRST, SECOND = 'reduce', 'reduce-ensemble'     # each try's working folder; the second never overwrites the first
 # the second try: EXOTIC combines up to five comparison stars of its own choosing (forcing Umbra's five did worse)
 ENSEMBLE = {'use_ensemble_photometry_rather_than_single_comp': True, 'maximum_number_of_ensemble_comparisons_for_transit': 5}
@@ -258,10 +259,33 @@ def audit(path, observer, binning):
     return done('ok', '%s, %d points%s' % (head['OBSCODE'], points, '; ' + ', '.join(fixed) if fixed else ''))
 
 
+def _ends(fit, transit):
+    """Are ingress and egress among the points EXOTIC fitted, with baseline on both sides? Clouded frames are left
+    out after the screening, and when they take one end of the transit EXOTIC fits the dip from the other end alone."""
+    if not transit.get('ingress') or not transit.get('egress') or len(fit['curve'].get('t') or []) < 2:
+        return None
+    at = lambda iso: datetime.fromisoformat(iso.rstrip('Z')).timestamp() / 60
+    t = sorted(at(x) for x in fit['curve']['t'])
+    step = sorted(b - a for a, b in zip(t, t[1:]))[len(t) // 2]
+    ingress, egress = at(transit['ingress']), at(transit['egress'])
+    pre, post = sum(x < ingress for x in t) * step, sum(x > egress for x in t) * step
+    for end, when in (('Ingress', ingress), ('Egress', egress)):
+        before, after = [x for x in t if x <= when], [x for x in t if x >= when]
+        if not before or not after:
+            return 'fail', '%s not seen' % end, 'no points %s %s' % ('before' if not before else 'after', end.lower())
+        if after[0] - before[-1] > HOLE:
+            return 'fail', '%s not seen' % end, '%s in a %d min gap' % (end.lower(), round(after[0] - before[-1]))
+    value = '%d / %d min baseline' % (round(pre), round(post))
+    return ('warn', 'Short baseline', value) if min(pre, post) < SIDE else ('ok', None, value)
+
+
 def check(fit, transit, phot):
     """Does EXOTIC's answer hold up? Each check is judged against numbers EXOTIC did not produce."""
     checks = []
     add = lambda key, label, state, value, why=None: checks.append(dict(key=key, label=label, state=state, value=value, why=why))
+    ends = _ends(fit, transit)
+    if ends:                                            # first: when an end is missing, that is the cause to show
+        add('ends', 'Ingress and egress', ends[0], ends[2], ends[1])
     oc = (fit['tc_bjd'] - transit['tc_bjd']) * 1440
     allowed = max(15.0, 3 * fit['tc_err'] * 1440)
     add('timing', 'Timing', 'ok' if abs(oc) <= allowed else ('warn' if abs(oc) <= 3 * allowed else 'fail'),
